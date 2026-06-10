@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Busca de CEPs por Raio</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #f4f6f9;
+            color: #333;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            max-width: 650px;
+            width: 100%;
+            background: #fff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+
+        h2 {
+            color: #1e293b;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        p.subtitle {
+            text-align: center;
+            color: #64748b;
+            font-size: 14px;
+            margin-bottom: 25px;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+            color: #475569;
+            font-size: 14px;
+        }
+
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 15px;
+            transition: border-color 0.2s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        .row {
+            display: flex;
+            gap: 15px;
+        }
+
+        .row .form-group {
+            flex: 1;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background-color: #1d4ed8;
+        }
+
+        button:disabled {
+            background-color: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        #log-console {
+            background-color: #0f172a;
+            color: #38bdf8;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            margin-top: 25px;
+            max-height: 180px;
+            overflow-y: auto;
+            display: none;
+            white-space: pre-wrap;
+        }
+
+        #download-section {
+            margin-top: 20px;
+            display: none;
+        }
+
+        .btn-download {
+            background-color: #10b981;
+        }
+
+        .btn-download:hover {
+            background-color: #059669;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📍 Busca de CEPs por Raio</h2>
+    <p class="subtitle">Gere grades de cobertura geográfica diretamente pelo navegador</p>
+
+    <div class="form-group">
+        <label for="cep">CEP Central (8 dígitos):</label>
+        <input type="text" id="cep" placeholder="Ex: 18010000" maxlength="9">
+    </div>
+
+    <div class="row">
+        <div class="form-group">
+            <label for="cidade">Cidade de Referência:</label>
+            <input type="text" id="cidade" placeholder="Ex: Sorocaba">
+        </div>
+        <div class="form-group" style="flex: 0 0 120px;">
+            <label for="uf">Estado (UF):</label>
+            <input type="text" id="uf" placeholder="Ex: SP" maxlength="2" style="text-transform: uppercase;">
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="raio">Raio de Cobertura (km):</label>
+        <input type="number" id="raio" value="5.0" step="0.5" min="0.1">
+    </div>
+
+    <button id="btn-processar" onclick="executarMapeamento()">📊 Gerar Malha Geográfica</button>
+
+    <div id="download-section">
+        <button class="btn-download" id="btn-download" onclick="baixarCSV()">📥 Baixar Arquivo CSV</button>
+    </div>
+
+    <div id="log-console"></div>
+</div>
+
+<script>
+    let csvConteudoGlobal = "";
+    let nomeArquivoGlobal = "";
+
+    // Função matemática do Haversine adaptada para JS
+    function calcularHaversine(lat1, lon1, lat2, lon2) {
+        const R = 6371.0;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+
+    function printLog(texto, limpar = false) {
+        const consoleElem = document.getElementById("log-console");
+        consoleElem.style.display = "block";
+        if (limpar) consoleElem.innerText = "";
+        consoleElem.innerText += texto + "\n";
+        consoleElem.scrollTop = consoleElem.scrollHeight;
+    }
+
+    async function buscarCoordenadasPorCidade(cidade, uf) {
+        const query = encodeURIComponent(`${cidade}, ${uf}, Brazil`);
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`;
+        try {
+            const response = await fetch(url, { headers: { "User-Agent": "ResilientRadiusHTML/2.0" } });
+            const dados = await response.json();
+            if (dados && dados.length > 0) {
+                return { lat: parseFloat(dados[0].lat), lon: parseFloat(dados[0].lon) };
+            }
+        } catch (e) { /* Fallback fail */ }
+        return null;
+    }
+
+    async function buscarDadosCep(cep) {
+        const url = `https://brasilapi.com.br/api/cep/v2/${cep}`;
+        try {
+            const response = await fetch(url);
+            if (response.ok) {
+                const dados = await response.json();
+                if (dados.location && dados.location.coordinates) {
+                    const lat = dados.location.coordinates.latitude;
+                    const lon = dados.location.coordinates.longitude;
+                    if (lat && lon) return { lat: parseFloat(lat), lon: parseFloat(lon) };
+                }
+            }
+        } catch (e) { /* API fail */ }
+        return null;
+    }
+
+    async function executarMapeamento() {
+        const btn = document.getElementById("btn-processar");
+        const downloadSec = document.getElementById("download-section");
+        
+        let cepInput = document.getElementById("cep").value.replace(/\D/g, "");
+        let cidadeInput = document.getElementById("cidade").value.trim();
+        let ufInput = document.getElementById("uf").value.trim().toUpperCase();
+        let raioInput = parseFloat(document.getElementById("raio").value) || 5.0;
+
+        if (!cidadeInput || !ufInput) {
+            alert("Por favor, preencha os campos de Cidade e Estado.");
+            return;
+        }
+
+        btn.disabled = true;
+        downloadSec.style.display = "none";
+        printLog("=====================================================", true);
+        printLog(" Iniciando Processamento Cartográfico...");
+        printLog("=====================================================");
+
+        let lat = null;
+        let lon = null;
+
+        if (cepInput.length === 8) {
+            printLog("[→] Consultando base postal (BrasilAPI)...");
+            const coords = await buscarDadosCep(cepInput);
+            if (coords) {
+                lat = coords.lat;
+                lon = coords.lon;
+                printLog("[✔] CEP específico localizado com sucesso!");
+            } else {
+                printLog("[!] CEP não encontrado ou sem mapas nativos na API.");
+            }
+        }
+
+        if (lat === null || lon === null) {
+            printLog(`[→] Migrando para centro geográfico de ${cidadeInput}-${ufInput}...`);
+            const coordsCidade = await buscarCoordenadasPorCidade(cidadeInput, ufInput);
+            if (coordsCidade) {
+                lat = coordsCidade.lat;
+                lon = coordsCidade.lon;
+                printLog("[✔] Coordenadas da cidade fixadas via OpenStreetMap.");
+            }
+        }
+
+        if (lat === null || lon === null) {
+            printLog("\n[ERRO CRÍTICO] Falha ao capturar pontos de ancoragem. Verifique os dados informados.");
+            btn.disabled = false;
+            return;
+        }
+
+        printLog(`    Origem definida em: (${lat.toFixed(4)}, ${lon.toFixed(4)})`);
+        printLog(`[…] Analisando malha geográfica em um raio de ${raioInput}km...`);
+
+        // Geração da malha (Equivalente ao numpy do Python)
+        const grauLat = raioInput / 111.0;
+        const grauLon = raioInput / (111.0 * Math.cos(lat * Math.PI / 180));
+        
+        let linhasCsv = ["cep,lat,lon,uf,distancia_km"];
+        let passos = 25;
+        let contador = 0;
+
+        for (let i = 0; i < passos; i++) {
+            let lt = (lat - grauLat) + (i * (grauLat * 2 / (passos - 1)));
+            for (let j = 0; j < passos; j++) {
+                let ln = (lon - grauLon) + (j * (grauLon * 2 / (passos - 1)));
+                let dist = calcularHaversine(lat, lon, lt, ln);
+
+                if (dist <= raioInput) {
+                    contador++;
+                    linhasCsv.push(`Sub-bloco ${String(contador).padStart(3, '0')},${lt.toFixed(6)},${ln.toFixed(6)},${ufInput},${dist.toFixed(2)}`);
+                }
+            }
+        }
+
+        printLog(`\n[✔] Processamento concluído com sucesso!`);
+        printLog(`    Total de pontos mapeados dentro do raio: ${contador}`);
+
+        // Prepara dados para download
+        csvConteudoGlobal = "\ufeff" + linhasCsv.join("\n"); // Adiciona o BOM para abrir correto no Excel do Brasil
+        const timestamp = new Date().toISOString().slice(0,10).replace(/-/g,"");
+        nomeArquivoGlobal = `raio_html_${cepInput || 'cidade'}_${Math.floor(raioInput)}km_${timestamp}.csv`;
+
+        btn.disabled = false;
+        downloadSec.style.display = "block";
+    }
+
+    function baixarCSV() {
+        const blob = new Blob([csvConteudoGlobal], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", nomeArquivoGlobal);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+</script>
+
+</body>
+</html>
